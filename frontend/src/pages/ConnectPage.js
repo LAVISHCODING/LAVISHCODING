@@ -291,17 +291,14 @@ const ConnectPage = () => {
                 <span className="text-sm text-gray-400">Code: {session?.code}</span>
               </div>
               
-              <div className="aspect-video bg-gray-900 rounded-lg overflow-hidden flex items-center justify-center">
-                <div className="text-center p-8">
-                  <Smartphone className="w-16 h-16 text-purple-400 mx-auto mb-4" />
-                  <p className="text-xl font-semibold mb-2">Remote Screen Preview</p>
-                  <p className="text-gray-400">
-                    In a full implementation, you would see the host's screen here
-                  </p>
-                  <p className="text-sm text-gray-500 mt-4">
-                    This demo shows the connection interface. WebRTC peer-to-peer streaming would display the actual screen.
-                  </p>
-                </div>
+              <div className="aspect-video bg-gray-900 rounded-lg overflow-hidden">
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  className="w-full h-full object-contain"
+                  data-testid="remote-screen"
+                />
               </div>
 
               <div className="mt-4 flex justify-center">
@@ -327,10 +324,10 @@ const ConnectPage = () => {
             </div>
 
             {/* Control Info */}
-            <div className="bg-blue-500/10 border border-blue-500/30 p-6 rounded-xl">
-              <h3 className="text-lg font-semibold mb-2 text-blue-300">💡 Demo Mode</h3>
+            <div className="bg-green-500/10 border border-green-500/30 p-6 rounded-xl">
+              <h3 className="text-lg font-semibold mb-2 text-green-300">✅ Live Connection</h3>
               <p className="text-gray-300">
-                This is a working connection interface. In production, WebRTC would enable real-time screen streaming and remote control capabilities.
+                You're now viewing the host's screen in real-time via WebRTC peer-to-peer connection.
               </p>
             </div>
           </div>
