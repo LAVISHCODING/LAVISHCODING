@@ -53,6 +53,16 @@ class SignalingMessage(BaseModel):
     type: str  # offer, answer, ice-candidate
     data: dict
 
+class SignalingData(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    session_id: str
+    sender: str
+    type: str
+    data: dict
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
 # Helper function to generate connection code
 def generate_code():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
@@ -145,6 +155,44 @@ async def get_active_sessions():
             session['connected_at'] = datetime.fromisoformat(session['connected_at'])
     
     return sessions
+
+# WebRTC Signaling endpoints
+@api_router.post("/signaling")
+async def send_signaling(message: SignalingMessage):
+    # Store signaling message
+    signaling_data = SignalingData(
+        session_id=message.session_id,
+        sender=message.sender,
+        type=message.type,
+        data=message.data
+    )
+    
+    doc = signaling_data.model_dump()
+    doc['timestamp'] = doc['timestamp'].isoformat()
+    
+    await db.signaling.insert_one(doc)
+    return {"status": "success"}
+
+@api_router.get("/signaling/{session_id}")
+async def get_signaling(session_id: str, sender: str, since: Optional[str] = None):
+    # Get signaling messages for this session that are NOT from this sender
+    query = {
+        "session_id": session_id,
+        "sender": {"$ne": sender}
+    }
+    
+    if since:
+        query["timestamp"] = {"$gt": since}
+    
+    messages = await db.signaling.find(query, {"_id": 0}).sort("timestamp", 1).to_list(100)
+    
+    return messages
+
+@api_router.delete("/signaling/{session_id}")
+async def clear_signaling(session_id: str):
+    # Clear all signaling messages for this session
+    await db.signaling.delete_many({"session_id": session_id})
+    return {"status": "success"}
 
 # Include the router in the main app
 app.include_router(api_router)
