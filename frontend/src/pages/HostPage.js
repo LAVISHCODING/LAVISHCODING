@@ -15,6 +15,8 @@ const HostPage = () => {
   const [error, setError] = useState('');
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const peerConnectionRef = useRef(null);
+  const pollingIntervalRef = useRef(null);
 
   const startSession = async () => {
     if (!hostName.trim()) {
@@ -28,14 +30,14 @@ const HostPage = () => {
       });
       setSession(response.data);
       setError('');
-      await startScreenShare();
+      await startScreenShare(response.data);
     } catch (err) {
       setError('Failed to create session');
       console.error(err);
     }
   };
 
-  const startScreenShare = async () => {
+  const startScreenShare = async (sessionData) => {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: { mediaSource: 'screen' },
@@ -48,6 +50,9 @@ const HostPage = () => {
       }
       setIsSharing(true);
 
+      // Start polling for client connections
+      startSignalingPolling(sessionData, stream);
+
       // Handle stream end
       stream.getVideoTracks()[0].addEventListener('ended', () => {
         stopSharing();
@@ -58,16 +63,115 @@ const HostPage = () => {
     }
   };
 
+  const startSignalingPolling = (sessionData, stream) => {
+    let lastTimestamp = null;
+    
+    pollingIntervalRef.current = setInterval(async () => {
+      try {
+        const params = new URLSearchParams({
+          sender: 'host',
+          ...(lastTimestamp && { since: lastTimestamp })
+        });
+        
+        const response = await axios.get(`${API}/signaling/${sessionData.id}?${params}`);
+        const messages = response.data;
+
+        for (const message of messages) {
+          lastTimestamp = message.timestamp;
+          await handleSignalingMessage(message, sessionData, stream);
+        }
+      } catch (err) {
+        console.error('Polling error:', err);
+      }
+    }, 1000);
+  };
+
+  const handleSignalingMessage = async (message, sessionData, stream) => {
+    if (message.type === 'answer' && message.sender === 'client') {
+      // Received answer from client
+      if (peerConnectionRef.current) {
+        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(message.data));
+      }
+    } else if (message.type === 'ice-candidate' && message.sender === 'client') {
+      // Received ICE candidate from client
+      if (peerConnectionRef.current && message.data.candidate) {
+        await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(message.data));
+      }
+    } else if (message.type === 'request-offer' && message.sender === 'client') {
+      // Client is requesting an offer
+      await createAndSendOffer(sessionData, stream);
+    }
+  };
+
+  const createAndSendOffer = async (sessionData, stream) => {
+    try {
+      // Create peer connection
+      const configuration = {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      };
+      
+      const pc = new RTCPeerConnection(configuration);
+      peerConnectionRef.current = pc;
+
+      // Add stream tracks to peer connection
+      stream.getTracks().forEach(track => {
+        pc.addTrack(track, stream);
+      });
+
+      // Handle ICE candidates
+      pc.onicecandidate = async (event) => {
+        if (event.candidate) {
+          await axios.post(`${API}/signaling`, {
+            session_id: sessionData.id,
+            sender: 'host',
+            type: 'ice-candidate',
+            data: event.candidate.toJSON()
+          });
+        }
+      };
+
+      // Create and send offer
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      await axios.post(`${API}/signaling`, {
+        session_id: sessionData.id,
+        sender: 'host',
+        type: 'offer',
+        data: offer
+      });
+
+      console.log('Offer sent to client');
+    } catch (err) {
+      console.error('Error creating offer:', err);
+    }
+  };
+
   const stopSharing = async () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
     }
+    
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+    
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+    
     setIsSharing(false);
     
     if (session) {
       try {
         await axios.post(`${API}/sessions/${session.id}/end`);
+        await axios.delete(`${API}/signaling/${session.id}`);
       } catch (err) {
         console.error(err);
       }
@@ -88,6 +192,12 @@ const HostPage = () => {
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
+      }
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.close();
+      }
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
       }
     };
   }, []);
