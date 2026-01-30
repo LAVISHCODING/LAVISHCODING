@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, HTTPException
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -6,9 +6,11 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
+import random
+import string
 
 
 ROOT_DIR = Path(__file__).parent
@@ -27,44 +29,122 @@ api_router = APIRouter(prefix="/api")
 
 
 # Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
+class Session(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    code: str
+    host_name: str
+    status: str = "active"  # active, connected, ended
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    connected_at: Optional[datetime] = None
+    client_name: Optional[str] = None
 
-class StatusCheckCreate(BaseModel):
+class SessionCreate(BaseModel):
+    host_name: str
+
+class SessionConnect(BaseModel):
+    code: str
     client_name: str
 
-# Add your routes to the router instead of directly to app
+class SignalingMessage(BaseModel):
+    session_id: str
+    sender: str  # host or client
+    type: str  # offer, answer, ice-candidate
+    data: dict
+
+# Helper function to generate connection code
+def generate_code():
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+
+# Routes
 @api_router.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"message": "RemoteLink Pro API"}
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
+@api_router.post("/sessions", response_model=Session)
+async def create_session(input: SessionCreate):
+    # Generate unique code
+    code = generate_code()
     
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
+    # Check if code already exists
+    existing = await db.sessions.find_one({"code": code, "status": "active"})
+    while existing:
+        code = generate_code()
+        existing = await db.sessions.find_one({"code": code, "status": "active"})
     
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
+    session = Session(code=code, host_name=input.host_name)
+    doc = session.model_dump()
+    doc['created_at'] = doc['created_at'].isoformat()
+    
+    await db.sessions.insert_one(doc)
+    return session
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
+@api_router.post("/sessions/connect")
+async def connect_session(input: SessionConnect):
+    # Find active session with code
+    session_doc = await db.sessions.find_one({"code": input.code, "status": "active"})
     
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
+    if not session_doc:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
     
-    return status_checks
+    # Update session
+    update_data = {
+        "status": "connected",
+        "connected_at": datetime.now(timezone.utc).isoformat(),
+        "client_name": input.client_name
+    }
+    
+    await db.sessions.update_one(
+        {"code": input.code},
+        {"$set": update_data}
+    )
+    
+    # Return session info
+    session_doc.update(update_data)
+    session_doc['created_at'] = datetime.fromisoformat(session_doc['created_at'])
+    session_doc['connected_at'] = datetime.fromisoformat(session_doc['connected_at'])
+    
+    return Session(**session_doc)
+
+@api_router.get("/sessions/{session_id}", response_model=Session)
+async def get_session(session_id: str):
+    session_doc = await db.sessions.find_one({"id": session_id})
+    
+    if not session_doc:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Convert timestamps
+    if isinstance(session_doc['created_at'], str):
+        session_doc['created_at'] = datetime.fromisoformat(session_doc['created_at'])
+    if session_doc.get('connected_at') and isinstance(session_doc['connected_at'], str):
+        session_doc['connected_at'] = datetime.fromisoformat(session_doc['connected_at'])
+    
+    return Session(**session_doc)
+
+@api_router.post("/sessions/{session_id}/end")
+async def end_session(session_id: str):
+    result = await db.sessions.update_one(
+        {"id": session_id},
+        {"$set": {"status": "ended"}}
+    )
+    
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    return {"message": "Session ended"}
+
+@api_router.get("/sessions", response_model=List[Session])
+async def get_active_sessions():
+    sessions = await db.sessions.find({"status": {"$in": ["active", "connected"]}}, {"_id": 0}).to_list(100)
+    
+    for session in sessions:
+        if isinstance(session['created_at'], str):
+            session['created_at'] = datetime.fromisoformat(session['created_at'])
+        if session.get('connected_at') and isinstance(session['connected_at'], str):
+            session['connected_at'] = datetime.fromisoformat(session['connected_at'])
+    
+    return sessions
 
 # Include the router in the main app
 app.include_router(api_router)
