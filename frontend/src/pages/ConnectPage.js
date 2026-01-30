@@ -14,6 +14,8 @@ const ConnectPage = () => {
   const [error, setError] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const videoRef = useRef(null);
+  const peerConnectionRef = useRef(null);
+  const pollingIntervalRef = useRef(null);
 
   const connectToSession = async () => {
     if (!clientName.trim()) {
@@ -34,6 +36,9 @@ const ConnectPage = () => {
       setSession(response.data);
       setIsConnected(true);
       setError('');
+      
+      // Request offer from host and start WebRTC connection
+      await requestOfferFromHost(response.data);
     } catch (err) {
       if (err.response?.status === 404) {
         setError('Invalid connection code or session expired');
@@ -44,6 +49,116 @@ const ConnectPage = () => {
     }
   };
 
+  const requestOfferFromHost = async (sessionData) => {
+    try {
+      // Send request for offer
+      await axios.post(`${API}/signaling`, {
+        session_id: sessionData.id,
+        sender: 'client',
+        type: 'request-offer',
+        data: {}
+      });
+
+      // Start polling for host's offer
+      startSignalingPolling(sessionData);
+    } catch (err) {
+      console.error('Error requesting offer:', err);
+      setError('Failed to establish connection');
+    }
+  };
+
+  const startSignalingPolling = (sessionData) => {
+    let lastTimestamp = null;
+    
+    pollingIntervalRef.current = setInterval(async () => {
+      try {
+        const params = new URLSearchParams({
+          sender: 'client',
+          ...(lastTimestamp && { since: lastTimestamp })
+        });
+        
+        const response = await axios.get(`${API}/signaling/${sessionData.id}?${params}`);
+        const messages = response.data;
+
+        for (const message of messages) {
+          lastTimestamp = message.timestamp;
+          await handleSignalingMessage(message, sessionData);
+        }
+      } catch (err) {
+        console.error('Polling error:', err);
+      }
+    }, 1000);
+  };
+
+  const handleSignalingMessage = async (message, sessionData) => {
+    if (message.type === 'offer' && message.sender === 'host') {
+      // Received offer from host
+      await handleOffer(message.data, sessionData);
+    } else if (message.type === 'ice-candidate' && message.sender === 'host') {
+      // Received ICE candidate from host
+      if (peerConnectionRef.current && message.data.candidate) {
+        try {
+          await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(message.data));
+        } catch (err) {
+          console.error('Error adding ICE candidate:', err);
+        }
+      }
+    }
+  };
+
+  const handleOffer = async (offer, sessionData) => {
+    try {
+      // Create peer connection
+      const configuration = {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      };
+      
+      const pc = new RTCPeerConnection(configuration);
+      peerConnectionRef.current = pc;
+
+      // Handle incoming stream
+      pc.ontrack = (event) => {
+        console.log('Received remote stream');
+        if (videoRef.current && event.streams[0]) {
+          videoRef.current.srcObject = event.streams[0];
+        }
+      };
+
+      // Handle ICE candidates
+      pc.onicecandidate = async (event) => {
+        if (event.candidate) {
+          await axios.post(`${API}/signaling`, {
+            session_id: sessionData.id,
+            sender: 'client',
+            type: 'ice-candidate',
+            data: event.candidate.toJSON()
+          });
+        }
+      };
+
+      // Set remote description and create answer
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      // Send answer to host
+      await axios.post(`${API}/signaling`, {
+        session_id: sessionData.id,
+        sender: 'client',
+        type: 'answer',
+        data: answer
+      });
+
+      console.log('Answer sent to host');
+    } catch (err) {
+      console.error('Error handling offer:', err);
+      setError('Failed to establish video connection');
+    }
+  };
+
   const handleCodeChange = (e) => {
     const value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (value.length <= 6) {
@@ -51,11 +166,40 @@ const ConnectPage = () => {
     }
   };
 
-  const disconnect = () => {
+  const disconnect = async () => {
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+    
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+    
+    if (session) {
+      try {
+        await axios.post(`${API}/sessions/${session.id}/end`);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    
     setIsConnected(false);
     setSession(null);
     navigate('/');
   };
+
+  useEffect(() => {
+    return () => {
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.close();
+      }
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+      }
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-white">
