@@ -1,5 +1,5 @@
 import React from 'react';
-import { Monitor, Smartphone, Zap, Shield, Radio, MousePointer } from 'lucide-react';
+import { Monitor, Smartphone, Zap, Shield, Radio, MousePointer, BookOpen } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const LandingPage = () => {
@@ -14,14 +14,19 @@ const LandingPage = () => {
             RemoteLink Pro
           </h1>
           <p className="text-2xl text-gray-300 mb-4" data-testid="hero-subtitle">
-            Control your PC from anywhere
+            View and Control your PC from anywhere
           </p>
-          <p className="text-lg text-gray-400 mb-12">
+          <p className="text-lg text-gray-400 mb-4">
             Real-time screen streaming with instant response. No installation required.
           </p>
+          <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg px-4 py-3 mb-8 max-w-2xl mx-auto">
+            <p className="text-blue-200 text-sm">
+              <strong>Hybrid Solution:</strong> RemoteLink Pro for viewing + Chrome Remote Desktop for control
+            </p>
+          </div>
 
           {/* Action Buttons */}
-          <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-20">
+          <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-8">
             <button
               onClick={() => navigate('/host')}
               className="group relative px-8 py-4 bg-blue-600 hover:bg-blue-700 rounded-lg text-lg font-semibold transition-all transform hover:scale-105 shadow-lg hover:shadow-blue-500/50 w-64"
@@ -39,9 +44,22 @@ const LandingPage = () => {
             >
               <div className="flex items-center justify-center gap-3">
                 <Smartphone className="w-6 h-6" />
-                <span>Control from Mobile</span>
+                <span>View from Mobile</span>
               </div>
             </button>
+          </div>
+
+          {/* Setup Guide Button */}
+          <div className="mb-20">
+            <button
+              onClick={() => navigate('/setup-guide')}
+              className="px-6 py-3 bg-green-600 hover:bg-green-700 rounded-lg font-semibold transition-all transform hover:scale-105 shadow-lg hover:shadow-green-500/50 flex items-center gap-2 mx-auto"
+              data-testid="setup-guide-button"
+            >
+              <BookOpen className="w-5 h-5" />
+              <span>Full Control Setup Guide</span>
+            </button>
+            <p className="text-gray-500 text-sm mt-2">Learn how to add mouse & keyboard control</p>
           </div>
 
           {/* Features Grid */}
@@ -59,7 +77,7 @@ const LandingPage = () => {
                 <Zap className="w-6 h-6 text-purple-400" />
               </div>
               <h3 className="text-lg font-semibold mb-2">Full keyboard control</h3>
-              <p className="text-gray-400 text-sm">Type naturally on remote device</p>
+              <p className="text-gray-400 text-sm">Via Chrome Remote Desktop</p>
             </div>
 
             <div className="bg-gray-800/50 backdrop-blur-sm p-6 rounded-xl border border-gray-700 hover:border-green-500 transition-all" data-testid="feature-mouse">
@@ -67,7 +85,7 @@ const LandingPage = () => {
                 <MousePointer className="w-6 h-6 text-green-400" />
               </div>
               <h3 className="text-lg font-semibold mb-2">Mouse simulation</h3>
-              <p className="text-gray-400 text-sm">Precise cursor control</p>
+              <p className="text-gray-400 text-sm">Via Chrome Remote Desktop</p>
             </div>
 
             <div className="bg-gray-800/50 backdrop-blur-sm p-6 rounded-xl border border-gray-700 hover:border-yellow-500 transition-all" data-testid="feature-secure">
